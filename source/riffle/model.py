@@ -8,6 +8,19 @@ from datetime import datetime
 from PySide.QtCore import Qt, QAbstractItemModel, QModelIndex, QDir
 from PySide.QtGui import QSortFilterProxyModel
 import clique
+import windows
+
+
+def isJunction(path):
+    '''Determine if the *path* is a NTFS junction.'''
+    if not windows.isReparsePoint(path):
+        return False
+    try:
+        os.listdir(path)
+        accessDenied = False
+    except WindowsError as e:
+        accessDenied = 'Error 5' in str(e)
+    return accessDenied
 
 
 def ItemFactory(path):
@@ -24,6 +37,9 @@ def ItemFactory(path):
 
     elif os.path.ismount(path):
         return Mount(path)
+
+    elif isJunction(path):
+        return Junction(path)
 
     elif os.path.isdir(path):
         return Directory(path)
@@ -213,6 +229,51 @@ class Directory(Item):
         for collection in collections:
             children.append(Collection(collection))
 
+        return children
+
+
+class Junction(Directory):
+    '''Represent a NTFS reparse point/junction.
+
+    Display the original path in the user interface,
+    but use the resolved path to fetch children.
+
+    '''
+    windowsExtendedPathPrefix = '\\\\?\\'
+
+    def __init__(self, path):
+        super(Junction, self).__init__(path)
+        self._resolvedPath = self.resolve(path)
+
+    @property
+    def type(self):
+        '''Return type of item as string.'''
+        return 'Junction'
+
+    def resolve(self, path):
+        '''Resolve *path* to the actual path of the junction.
+
+        Return original *path* if it could not be resolved.
+
+        '''
+        try:
+            resolvedPath = windows.getFinalPath(path)
+            resolvedPath = resolvedPath.replace(
+                self.windowsExtendedPathPrefix, ""
+            )
+        except:
+            resolvedPath = path
+
+        return resolvedPath
+
+    def _fetchChildren(self):
+        '''Use resolved path to fetch, but revert it for UI display.'''
+        originalPath = self.path
+        self.path = self._resolvedPath
+
+        children = super(Junction, self)._fetchChildren()
+
+        self.path = originalPath
         return children
 
 
